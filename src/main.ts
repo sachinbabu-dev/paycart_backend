@@ -4,7 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { apiReference } from '@scalar/nestjs-api-reference';
-import type { Response } from 'express';
+import type { Express } from 'express';
 import { json } from 'express';
 import { AppModule } from './app.module';
 
@@ -63,13 +63,21 @@ async function bootstrap(): Promise<void> {
       theme: 'purple',
     }),
   );
-  app
-    .getHttpAdapter()
-    .get('/docs/json', (_req, res: Response) => res.json(openApiDocument));
+  // Serve the raw OpenAPI JSON on the underlying express instance directly.
+  // Going through Nest's HttpAdapter type-check hits a generic-Response
+  // mismatch across the @types/express versions pulled in by Nest vs. our
+  // direct dep, so we drop down to the express app for this one route.
+  const expressApp = app.getHttpAdapter().getInstance() as Express;
+  expressApp.get('/docs/json', (_req, res) => {
+    res.json(openApiDocument);
+  });
 
   const config = app.get(ConfigService);
   const port = config.get<number>('PORT', 3000);
-  await app.listen(port);
+  // Bind on 0.0.0.0 so Railway / any container edge proxy can reach the
+  // process. Nest's default sometimes lands on IPv6 loopback only, which
+  // shows up as "Application failed to respond" from the platform.
+  await app.listen(port, '0.0.0.0');
 
   console.log(`payment-backend listening on :${port}`);
   console.log(`API docs: http://localhost:${port}/docs`);
