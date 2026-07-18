@@ -17,6 +17,13 @@ export class RedisEventBus implements EventBus, OnModuleInit, OnModuleDestroy {
   constructor(private readonly config: ConfigService) {}
 
   onModuleInit(): void {
+    // Skip connection setup entirely when this impl isn't the selected driver.
+    // The provider is still instantiated (Nest DI needs a concrete instance to
+    // wire the EVENT_BUS factory), but we shouldn't open a Redis socket just
+    // to sit unused — that's what caused ECONNREFUSED noise on hosts with no
+    // Redis service configured.
+    if (this.config.get<string>('EVENT_BUS_DRIVER') !== 'redis') return;
+
     const url = this.config.getOrThrow<string>('REDIS_URL');
     this.publisher = new Redis(url, { lazyConnect: true });
     this.subscriber = new Redis(url, { lazyConnect: true });

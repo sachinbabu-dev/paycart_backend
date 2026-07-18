@@ -7,7 +7,6 @@ export const envValidationSchema = Joi.object({
   PORT: Joi.number().default(3000),
 
   DATABASE_URL: Joi.string().uri().required(),
-  REDIS_URL: Joi.string().uri().required(),
 
   JWT_SECRET: Joi.string().min(16).required(),
   JWT_EXPIRES_IN: Joi.string().default('7d'),
@@ -15,6 +14,15 @@ export const envValidationSchema = Joi.object({
   STRIPE_SECRET_KEY: Joi.string().required(),
   STRIPE_WEBHOOK_SECRET: Joi.string().required(),
 
+  // REDIS_URL is only required when the redis event bus driver is selected;
+  // the default in-process driver has no Redis dependency.
   EVENT_BUS_DRIVER: Joi.string().valid('memory', 'redis').default('memory'),
+  REDIS_URL: Joi.string()
+    .uri()
+    .when('EVENT_BUS_DRIVER', {
+      is: 'redis',
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
   OUTBOX_POLL_INTERVAL_MS: Joi.number().default(1000),
 });
