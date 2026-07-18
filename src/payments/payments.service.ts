@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import Stripe from 'stripe';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
 import { OutboxService } from '../common/outbox/outbox.service';
 import { OrderEventEntity } from '../orders/entities/order-event.entity';
 import { OrderEntity } from '../orders/entities/order.entity';
@@ -29,6 +29,8 @@ export interface CheckoutResult {
   clientSecret: string;
   status: PaymentStatus;
 }
+
+const UNIQUE_VIOLATION = '23505';
 
 @Injectable()
 export class PaymentsService {
@@ -53,68 +55,129 @@ export class PaymentsService {
       throw new BadRequestException('Idempotency-Key header required');
     }
 
-    // Replay protection: if we've already seen this key, return the prior
-    // result rather than creating a new PaymentIntent. This is safe because
-    // Stripe's own idempotency mechanism would return the same PI anyway;
-    // short-circuiting here just avoids a needless network round-trip.
-    const existing = await this.payments.findOne({
+    // Fast path: if we've already seen this idempotency key, return the prior
+    // result without any Stripe I/O. Same key + same order = same payment.
+    const seen = await this.payments.findOne({
       where: { idempotencyKey: params.idempotencyKey },
     });
-    if (existing) {
-      if (existing.orderId !== params.orderId) {
+    if (seen) {
+      if (seen.orderId !== params.orderId) {
         throw new ConflictException('idempotency key reused with different order');
       }
-      const pi = existing.stripePaymentIntentId
-        ? await this.retrieveIntent(existing.stripePaymentIntentId)
-        : null;
-      return {
-        paymentId: existing.id,
-        clientSecret: pi?.client_secret ?? '',
-        status: existing.status,
-      };
+      return this.hydrateResult(seen);
     }
 
-    const order = await this.orders.findByIdForUser(params.orderId, params.userId);
-    if (order.status !== OrderStatus.Pending && order.status !== OrderStatus.Failed) {
-      throw new BadRequestException(
-        `order not in a checkoutable state: ${order.status}`,
-      );
-    }
-
-    const intent = await this.stripe.createPaymentIntent({
-      amount: Number(order.totalAmount),
-      currency: order.currency,
-      idempotencyKey: params.idempotencyKey,
-      orderId: order.id,
-    });
-
-    // Payment row + order transition to payment_pending + outbox row all in
-    // one transaction — either the whole thing commits or none of it does.
-    return this.dataSource.transaction(async (manager) => {
-      const payment = manager.create(PaymentEntity, {
-        orderId: order.id,
-        stripePaymentIntentId: intent.id,
-        status: mapIntentStatus(intent.status),
-        idempotencyKey: params.idempotencyKey,
-        amount: order.totalAmount,
-        currency: order.currency,
+    // Serialize concurrent checkouts on the same order. Two clicks in quick
+    // succession would otherwise both see "no in-flight payment", both call
+    // Stripe, and race to insert — violating either the idempotency_key or
+    // stripe_payment_intent_id unique index. The lock ensures whichever
+    // request loses the race sees the winner's payment and returns it.
+    const active = await this.dataSource.transaction(async (manager) => {
+      const order = await manager
+        .createQueryBuilder(OrderEntity, 'o')
+        .setLock('pessimistic_write')
+        .where('o.id = :id', { id: params.orderId })
+        .getOne();
+      if (!order || order.userId !== params.userId) {
+        throw new NotFoundException('order not found');
+      }
+      if (
+        order.status !== OrderStatus.Pending &&
+        order.status !== OrderStatus.Failed
+      ) {
+        throw new BadRequestException(
+          `order not in a checkoutable state: ${order.status}`,
+        );
+      }
+      const activePayment = await manager.findOne(PaymentEntity, {
+        where: {
+          orderId: order.id,
+          status: In([PaymentStatus.RequiresAction, PaymentStatus.Processing]),
+        },
       });
-      const saved = await manager.save(payment);
-
-      await this.orders.transitionInTransaction(
-        manager,
-        order.id,
-        OrderStatus.PaymentPending,
-        ORDER_EVENT_TYPES.PaymentPending,
-        { paymentId: saved.id, stripePaymentIntentId: intent.id },
-      );
-
-      return {
-        paymentId: saved.id,
-        clientSecret: intent.client_secret ?? '',
-        status: saved.status,
-      };
+      return { order, activePayment };
     });
+
+    if (active.activePayment) return this.hydrateResult(active.activePayment);
+
+    // Stripe call outside the txn — it can take a second or two and we don't
+    // want to hold the order-row lock that long. The `idempotencyKey` passed
+    // through is Stripe's own dedup mechanism, so this call itself is safe
+    // to retry from Stripe's side.
+    const intent = await this.stripe.createPaymentIntent({
+      amount: Number(active.order.totalAmount),
+      currency: active.order.currency,
+      idempotencyKey: params.idempotencyKey,
+      orderId: active.order.id,
+    });
+
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const payment = manager.create(PaymentEntity, {
+          orderId: active.order.id,
+          stripePaymentIntentId: intent.id,
+          status: mapIntentStatus(intent.status),
+          idempotencyKey: params.idempotencyKey,
+          amount: active.order.totalAmount,
+          currency: active.order.currency,
+        });
+        const saved = await manager.save(payment);
+
+        await this.orders.transitionInTransaction(
+          manager,
+          active.order.id,
+          OrderStatus.PaymentPending,
+          ORDER_EVENT_TYPES.PaymentPending,
+          { paymentId: saved.id, stripePaymentIntentId: intent.id },
+        );
+
+        return {
+          paymentId: saved.id,
+          clientSecret: intent.client_secret ?? '',
+          status: saved.status,
+        };
+      });
+    } catch (err) {
+      // Belt-and-braces for the race the lock is supposed to prevent. If
+      // another request beat us to inserting this stripe_payment_intent_id
+      // (or somehow the same idempotency_key), look up the winner and return
+      // its result rather than surfacing a 500 to a client that did nothing
+      // wrong.
+      if (
+        err instanceof QueryFailedError &&
+        (err as unknown as { code?: string }).code === UNIQUE_VIOLATION
+      ) {
+        const winner =
+          (await this.payments.findOne({
+            where: { stripePaymentIntentId: intent.id },
+          })) ??
+          (await this.payments.findOne({
+            where: { idempotencyKey: params.idempotencyKey },
+          }));
+        if (winner) {
+          this.logger.warn(
+            `checkout race resolved by returning existing payment ${winner.id}`,
+          );
+          return {
+            paymentId: winner.id,
+            clientSecret: intent.client_secret ?? '',
+            status: winner.status,
+          };
+        }
+      }
+      throw err;
+    }
+  }
+
+  private async hydrateResult(payment: PaymentEntity): Promise<CheckoutResult> {
+    const pi = payment.stripePaymentIntentId
+      ? await this.retrieveIntent(payment.stripePaymentIntentId)
+      : null;
+    return {
+      paymentId: payment.id,
+      clientSecret: pi?.client_secret ?? '',
+      status: payment.status,
+    };
   }
 
   // Webhook handler. Called by the controller after signature verification.
