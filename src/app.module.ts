@@ -7,6 +7,7 @@ import { DatabaseModule } from './common/database/database.module';
 import { EventBusModule } from './common/event-bus/event-bus.module';
 import { OutboxModule } from './common/outbox/outbox.module';
 import { envValidationSchema } from './config/env.validation';
+import { FulfillmentModule } from './fulfillment/fulfillment.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { OrdersModule } from './orders/orders.module';
@@ -34,6 +35,7 @@ import { ProductsModule } from './products/products.module';
     PaymentsModule,
     InventoryModule,
     NotificationsModule,
+    FulfillmentModule,
   ],
 })
 export class AppModule {}

@@ -61,6 +61,42 @@ Any illegal transition (`shipped → payment_pending`, etc.) throws `BadRequestE
 
 The system is designed to be driven end-to-end against Stripe test mode. Success card `4242 4242 4242 4242`, decline card `4000 0000 0000 0002`. The failure path is not a bolt-on: `payment_intent.payment_failed` transitions the order to `failed`, emits `payment.failed`, and the state machine explicitly permits `failed → payment_pending` so a retry checkout call is legal.
 
+### 6. Simulated fulfillment with a durable poller
+
+After `payment.succeeded`, the `fulfillment` module transitions the order `paid → preparing` immediately, then a scheduler-driven poller flips `preparing → shipped` once the order has been in that state for `FULFILLMENT_PREPARING_DELAY_SECONDS` (default 10). The client sees three visible transitions in quick succession.
+
+Two design choices worth articulating in interviews:
+
+- **`SELECT ... FOR UPDATE SKIP LOCKED`** on the shipper query. With two app instances running, each tick grabs a disjoint slice of ready orders — an automatic competitive-consumer pattern with no explicit leader election. This is how the outbox publisher would also be scaled.
+- **Cron poller over `setTimeout`.** An in-process timer would lose ship intent on restart. Deriving what to ship from durable DB state every tick is the correct pattern for anything that must eventually happen.
+
+### 7. Realtime order stream over SSE
+
+`GET /orders/:id/stream` returns a Server-Sent Events stream:
+- First message is a **snapshot** — the current order + its full `order_events` history — so the client works with one request.
+- Subsequent messages are pushed as `order.*` and `payment.*` events fire.
+- Periodic `keepalive` messages every 15s prevent idle proxies (Railway, Cloudflare) from killing the connection.
+
+The whole realtime story reuses the existing `EventBus` — no new transport infra. A single `Subject` fans events out to any number of connected clients, each with a filter for its own order id.
+
+**Auth for SSE is a genuine constraint:** browsers can't set custom headers on `EventSource`, so the token has to travel in the URL. Rather than passing the 7-day access token in a query string (where it lands in access logs and browser history), the client first calls `POST /auth/stream-token` (guarded by the normal bearer) to mint a **60-second, scope-limited stream token**, then passes that as `?token=`. A leak of the URL leaks a 60-second read-only credential — not full account access. The `JwtStreamStrategy` rejects any token without `scope: 'stream'`, so the two token types can't be misused across endpoints.
+
+Client-side:
+```ts
+const { streamToken } = await fetch('/auth/stream-token', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${accessToken}` },
+}).then((r) => r.json());
+
+const es = new EventSource(`/orders/${orderId}/stream?token=${streamToken}`);
+es.onmessage = (ev) => {
+  const msg = JSON.parse(ev.data);
+  // msg.kind is 'snapshot' | 'event' | 'keepalive'
+};
+```
+
+`GET /orders/:id` and `GET /orders/:id/events` remain as polling fallbacks for clients where SSE isn't practical.
+
 ## API
 
 All order/payment endpoints require `Authorization: Bearer <jwt>`.
@@ -69,11 +105,13 @@ All order/payment endpoints require `Authorization: Bearer <jwt>`.
 |---|---|---|
 | `POST` | `/auth/signup` | body: `{ email, password }` |
 | `POST` | `/auth/login` | returns `{ accessToken, user }` |
+| `POST` | `/auth/stream-token` | mints a 60s scoped JWT for SSE (auth: bearer) |
 | `GET` | `/products` | list the coffee catalog |
 | `GET` | `/products/:sku` | fetch one product |
 | `POST` | `/orders` | creates a `pending` order; prices looked up server-side by SKU |
 | `GET` | `/orders/:id` | order detail + current status |
-| `GET` | `/orders/:id/events` | audit trail (used later for the realtime timeline) |
+| `GET` | `/orders/:id/events` | audit trail of state transitions |
+| `GET` | `/orders/:id/stream` | SSE stream (auth: `?token=<stream-token>`) |
 | `POST` | `/orders/:id/checkout` | requires `Idempotency-Key` header; returns Stripe `client_secret` |
 | `POST` | `/webhooks/stripe` | Stripe webhook receiver (raw body, signature-verified) |
 | `GET` | `/inventory` | list current stock |
@@ -123,10 +161,10 @@ stripe trigger payment_intent.succeeded
 
 ## Deliberately out of scope
 
-- **Frontend / realtime transport.** The `orders.order_events` audit table and the event bus are already shaped for a WebSocket/SSE gateway to consume without backend rework.
+- **Frontend (Next.js client).** The SSE endpoint is ready for a client to consume; the frontend itself is a separate handoff.
 - **Multi-service deployment.** The module boundaries are the split points; extracting `payments` first would be a package-and-deploy exercise, not a rewrite.
 - **Real email/SMS.** `notifications` writes the log row and logs the intent — swap in Resend/SendGrid at that seam.
-- **Outbox publisher leader election.** Fine for a single instance; needs work for HA.
+- **Outbox publisher leader election.** The fulfillment shipper is already safe under horizontal scale via `FOR UPDATE SKIP LOCKED`; the outbox publisher isn't, yet.
 
 ## Event bus driver
 

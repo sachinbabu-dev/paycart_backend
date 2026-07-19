@@ -4,6 +4,7 @@ export const ORDER_EVENT_TYPES = {
   Paid: 'order.paid',
   Failed: 'order.failed',
   Cancelled: 'order.cancelled',
+  Preparing: 'order.preparing',
   Shipped: 'order.shipped',
 } as const;
 

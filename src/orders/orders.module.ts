@@ -5,6 +5,7 @@ import { ProductsModule } from '../products/products.module';
 import { OrderEventEntity } from './entities/order-event.entity';
 import { OrderItemEntity } from './entities/order-item.entity';
 import { OrderEntity } from './entities/order.entity';
+import { OrderStreamService } from './order-stream.service';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 
@@ -15,7 +16,7 @@ import { OrdersService } from './orders.service';
     ProductsModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService],
+  providers: [OrdersService, OrderStreamService],
   exports: [OrdersService],
 })
 export class OrdersModule {}

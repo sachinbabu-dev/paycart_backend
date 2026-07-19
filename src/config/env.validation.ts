@@ -25,4 +25,11 @@ export const envValidationSchema = Joi.object({
       otherwise: Joi.optional(),
     }),
   OUTBOX_POLL_INTERVAL_MS: Joi.number().default(1000),
+
+  // Simulated warehouse fulfillment. After payment succeeds, the order goes
+  // to `preparing` immediately, then to `shipped` once it has been in
+  // `preparing` for this many seconds. Poll interval should be >= the outbox
+  // interval to avoid two timers stampeding on wake.
+  FULFILLMENT_PREPARING_DELAY_SECONDS: Joi.number().default(10),
+  FULFILLMENT_POLL_INTERVAL_MS: Joi.number().default(2000),
 });

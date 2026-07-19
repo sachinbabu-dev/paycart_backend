@@ -36,6 +36,7 @@ export class NotificationsService implements OnModuleInit {
       PAYMENT_EVENT_TYPES.Failed,
       (e) => this.onPaymentFailed(e),
     );
+    this.bus.subscribe(ORDER_EVENT_TYPES.Preparing, (e) => this.onOrderPreparing(e));
     this.bus.subscribe(ORDER_EVENT_TYPES.Shipped, (e) => this.onOrderShipped(e));
   }
 
@@ -61,6 +62,17 @@ export class NotificationsService implements OnModuleInit {
     this.logger.log(
       `[notify] payment failed for order ${event.payload.orderId}: ${event.payload.reason}`,
     );
+  }
+
+  private async onOrderPreparing(event: DomainEvent): Promise<void> {
+    const orderId =
+      (event.payload as { orderId?: string } | undefined)?.orderId ?? event.aggregateId;
+    await this.record({
+      orderId,
+      type: 'order.preparing',
+      payload: event.payload as Record<string, unknown> | null,
+    });
+    this.logger.log(`[notify] order preparing: ${orderId}`);
   }
 
   private async onOrderShipped(event: DomainEvent): Promise<void> {

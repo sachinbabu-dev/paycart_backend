@@ -10,10 +10,16 @@ import { Repository } from 'typeorm';
 import { UserEntity } from './user.entity';
 
 const BCRYPT_COST = 12;
+const STREAM_TOKEN_TTL = '60s';
 
 export interface AuthResult {
   accessToken: string;
   user: { id: string; email: string };
+}
+
+export interface StreamTokenResult {
+  streamToken: string;
+  expiresIn: number;
 }
 
 @Injectable()
@@ -38,6 +44,17 @@ export class AuthService {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) throw new UnauthorizedException('invalid credentials');
     return this.issueToken(user);
+  }
+
+  // Mints a short-lived JWT specifically scoped for the SSE endpoint. Caller
+  // must already hold a valid main bearer (enforced by the controller guard).
+  // Kept deliberately short — this token travels in the URL query string.
+  issueStreamToken(userId: string, email: string): StreamTokenResult {
+    const streamToken = this.jwt.sign(
+      { sub: userId, email, scope: 'stream' },
+      { expiresIn: STREAM_TOKEN_TTL },
+    );
+    return { streamToken, expiresIn: 60 };
   }
 
   private issueToken(user: UserEntity): AuthResult {
