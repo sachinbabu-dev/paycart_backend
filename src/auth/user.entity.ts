@@ -17,6 +17,17 @@ export class UserEntity {
   @Column({ name: 'password_hash', type: 'varchar', length: 255 })
   passwordHash!: string;
 
+  // Lazily populated on the user's first subscription. See
+  // SubscriptionsService.ensureStripeCustomer.
+  @Column({
+    name: 'stripe_customer_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+    unique: true,
+  })
+  stripeCustomerId!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 

@@ -13,6 +13,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { OrdersModule } from './orders/orders.module';
 import { PaymentsModule } from './payments/payments.module';
 import { ProductsModule } from './products/products.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { WellKnownModule } from './well-known/well-known.module';
 
 @Module({
   imports: [
@@ -32,10 +34,12 @@ import { ProductsModule } from './products/products.module';
     AuthModule,
     ProductsModule,
     OrdersModule,
+    SubscriptionsModule,
     PaymentsModule,
     InventoryModule,
     NotificationsModule,
     FulfillmentModule,
+    WellKnownModule,
   ],
 })
 export class AppModule {}

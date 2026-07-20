@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
+  forwardRef,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -14,6 +16,7 @@ import { OrderEntity } from '../orders/entities/order.entity';
 import { OrdersService } from '../orders/orders.service';
 import { OrderStatus } from '../orders/order-status';
 import { ORDER_EVENT_TYPES } from '../orders/order-events';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { PaymentEntity } from './entities/payment.entity';
 import { WebhookEventEntity } from './entities/webhook-event.entity';
 import {
@@ -44,6 +47,12 @@ export class PaymentsService {
     private readonly stripe: StripeService,
     private readonly orders: OrdersService,
     private readonly outbox: OutboxService,
+    // forwardRef because SubscriptionsService depends on this module's
+    // StripeService, and this handler dispatches subscription webhook events
+    // back to it. See subscriptions.module.ts for the same forwardRef on the
+    // other side.
+    @Inject(forwardRef(() => SubscriptionsService))
+    private readonly subscriptions: SubscriptionsService,
   ) {}
 
   async checkout(params: {
@@ -211,6 +220,36 @@ export class PaymentsService {
             event.data.object as Stripe.PaymentIntent,
           );
           break;
+
+        // Subscription lifecycle — dispatched to SubscriptionsService.
+        // Kept in this handler (not a separate webhook endpoint) so we only
+        // ever verify one Stripe signature and dedup against one ledger.
+        case 'invoice.paid':
+        case 'invoice.payment_succeeded':
+          await this.subscriptions.onInvoicePaid(
+            manager,
+            event.data.object as Stripe.Invoice,
+          );
+          break;
+        case 'invoice.payment_failed':
+          await this.subscriptions.onInvoicePaymentFailed(
+            manager,
+            event.data.object as Stripe.Invoice,
+          );
+          break;
+        case 'customer.subscription.updated':
+          await this.subscriptions.onSubscriptionUpdated(
+            manager,
+            event.data.object as Stripe.Subscription,
+          );
+          break;
+        case 'customer.subscription.deleted':
+          await this.subscriptions.onSubscriptionDeleted(
+            manager,
+            event.data.object as Stripe.Subscription,
+          );
+          break;
+
         default:
           // Unhandled event types are still recorded in webhook_events so
           // Stripe stops retrying; ignore the body.

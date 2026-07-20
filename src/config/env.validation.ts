@@ -32,4 +32,9 @@ export const envValidationSchema = Joi.object({
   // interval to avoid two timers stampeding on wake.
   FULFILLMENT_PREPARING_DELAY_SECONDS: Joi.number().default(10),
   FULFILLMENT_POLL_INTERVAL_MS: Joi.number().default(2000),
+
+  // Optional. If set, /.well-known/apple-developer-merchantid-domain-association
+  // returns this string as text/plain — that's what Stripe polls to verify
+  // your domain for Apple Pay. If unset, the endpoint 404s.
+  APPLE_PAY_DOMAIN_ASSOCIATION: Joi.string().optional().allow(''),
 });

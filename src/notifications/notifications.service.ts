@@ -12,6 +12,12 @@ import {
   type PaymentSucceededPayload,
 } from '../payments/payment-events';
 import { ORDER_EVENT_TYPES } from '../orders/order-events';
+import {
+  SUBSCRIPTION_EVENT_TYPES,
+  type SubscriptionActivatedPayload,
+  type SubscriptionCanceledPayload,
+  type SubscriptionPaymentFailedPayload,
+} from '../subscriptions/subscription-events';
 import { NotificationLogEntity } from './notification-log.entity';
 
 // Simulated notification sink. In a real system this would hand off to
@@ -38,6 +44,41 @@ export class NotificationsService implements OnModuleInit {
     );
     this.bus.subscribe(ORDER_EVENT_TYPES.Preparing, (e) => this.onOrderPreparing(e));
     this.bus.subscribe(ORDER_EVENT_TYPES.Shipped, (e) => this.onOrderShipped(e));
+
+    this.bus.subscribe<SubscriptionActivatedPayload>(
+      SUBSCRIPTION_EVENT_TYPES.Activated,
+      (e) =>
+        this.recordAndLog('subscription.activated', e.payload, {
+          message: `subscription activated for ${e.payload.productId}`,
+        }),
+    );
+    this.bus.subscribe<SubscriptionPaymentFailedPayload>(
+      SUBSCRIPTION_EVENT_TYPES.PaymentFailed,
+      (e) =>
+        this.recordAndLog('subscription.payment_failed', e.payload, {
+          message: `subscription payment failed for ${e.payload.productId}: ${e.payload.reason}`,
+        }),
+    );
+    this.bus.subscribe<SubscriptionCanceledPayload>(
+      SUBSCRIPTION_EVENT_TYPES.Canceled,
+      (e) =>
+        this.recordAndLog('subscription.canceled', e.payload, {
+          message: `subscription canceled for ${e.payload.productId}`,
+        }),
+    );
+  }
+
+  private async recordAndLog(
+    type: string,
+    payload: object,
+    logInfo: { message: string },
+  ): Promise<void> {
+    await this.record({
+      orderId: null,
+      type,
+      payload: payload as unknown as Record<string, unknown>,
+    });
+    this.logger.log(`[notify] ${logInfo.message}`);
   }
 
   private async onPaymentSucceeded(

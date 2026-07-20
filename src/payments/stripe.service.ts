@@ -45,6 +45,103 @@ export class StripeService {
     return this.stripe.paymentIntents.retrieve(id);
   }
 
+  // ---- Customers ----
+
+  createCustomer(params: {
+    userId: string;
+    email: string;
+  }): Promise<Stripe.Customer> {
+    return this.stripe.customers.create({
+      email: params.email,
+      metadata: { user_id: params.userId },
+    });
+  }
+
+  // ---- Products / Prices (used by the boot-time sync for recurring SKUs) ----
+
+  async ensureProductAndPrice(params: {
+    sku: string;
+    name: string;
+    unitPrice: number;
+    currency: string;
+    interval: 'month' | 'year';
+  }): Promise<{ productId: string; priceId: string }> {
+    // Idempotent by lookup_key on the Price side. Products are created fresh
+    // per sync since Stripe doesn't offer a lookup on Product metadata.
+    const existing = await this.stripe.prices.list({
+      lookup_keys: [`sku:${params.sku}`],
+      active: true,
+      limit: 1,
+    });
+    if (existing.data[0]) {
+      const price = existing.data[0];
+      const productId =
+        typeof price.product === 'string' ? price.product : price.product.id;
+      return { productId, priceId: price.id };
+    }
+    const product = await this.stripe.products.create({
+      name: params.name,
+      metadata: { sku: params.sku },
+    });
+    const price = await this.stripe.prices.create({
+      product: product.id,
+      unit_amount: params.unitPrice,
+      currency: params.currency.toLowerCase(),
+      recurring: { interval: params.interval },
+      lookup_key: `sku:${params.sku}`,
+    });
+    return { productId: product.id, priceId: price.id };
+  }
+
+  // ---- Subscriptions ----
+
+  createSubscription(params: {
+    customerId: string;
+    priceId: string;
+    userId: string;
+    productSku: string;
+    idempotencyKey: string;
+  }): Promise<Stripe.Subscription> {
+    return this.stripe.subscriptions.create(
+      {
+        customer: params.customerId,
+        items: [{ price: params.priceId }],
+        // Return a subscription in "incomplete" state with an initial invoice
+        // that has a PaymentIntent attached. Client confirms that PI to
+        // activate the subscription — same pattern as one-time payments,
+        // same Stripe.js Payment Element on the frontend.
+        payment_behavior: 'default_incomplete',
+        payment_settings: {
+          save_default_payment_method: 'on_subscription',
+          payment_method_types: ['card'],
+        },
+        expand: ['latest_invoice.payment_intent'],
+        metadata: { user_id: params.userId, product_sku: params.productSku },
+      },
+      { idempotencyKey: params.idempotencyKey },
+    );
+  }
+
+  retrieveSubscription(id: string): Promise<Stripe.Subscription> {
+    return this.stripe.subscriptions.retrieve(id, {
+      expand: ['latest_invoice.payment_intent'],
+    });
+  }
+
+  cancelSubscription(
+    id: string,
+    opts: { immediately?: boolean } = {},
+  ): Promise<Stripe.Subscription> {
+    // Two ways to cancel a subscription:
+    //   - `subscriptions.cancel(id)` ends it immediately (this call)
+    //   - `subscriptions.update(id, { cancel_at_period_end: true })` lets the
+    //     user finish the period they've paid for
+    // Default to the "graceful" pattern because it's the customer-friendly
+    // choice and matches how most consumer subscriptions actually behave.
+    if (opts.immediately) return this.stripe.subscriptions.cancel(id);
+    return this.stripe.subscriptions.update(id, { cancel_at_period_end: true });
+  }
+
   constructWebhookEvent(rawBody: Buffer, signature: string): Stripe.Event {
     return this.stripe.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
   }

@@ -70,7 +70,43 @@ Two design choices worth articulating in interviews:
 - **`SELECT ... FOR UPDATE SKIP LOCKED`** on the shipper query. With two app instances running, each tick grabs a disjoint slice of ready orders — an automatic competitive-consumer pattern with no explicit leader election. This is how the outbox publisher would also be scaled.
 - **Cron poller over `setTimeout`.** An in-process timer would lose ship intent on restart. Deriving what to ship from durable DB state every tick is the correct pattern for anything that must eventually happen.
 
-### 7. Realtime order stream over SSE
+### 7. Recurring billing (Stripe Subscriptions)
+
+Recurring products in `products.products` (currently `coffee-club-monthly`) go through a second Stripe integration — a real Subscription with recurring invoices, not a repeated PaymentIntent. The `subscriptions` module owns this and lives in its own bounded context / schema.
+
+**Boot-time Stripe sync.** On startup, `SubscriptionsService` finds any recurring product with an empty `stripe_price_id` and creates a matching Stripe **Product + Price** via the API. Idempotent via a Stripe `lookup_key` of `sku:<sku>`. Failures don't block boot — an on-demand sync retries on the first subscription attempt.
+
+**Lazy Stripe Customer.** Users don't get a Stripe Customer created at signup — most signups never subscribe. On the first `POST /subscriptions`, `SubscriptionsService.ensureStripeCustomer` creates a Customer and stores the id on `auth.users.stripe_customer_id`. A concurrent race is handled by re-reading and using whichever customer id landed first.
+
+**Subscription creation.** `POST /subscriptions` calls `stripe.subscriptions.create({ payment_behavior: 'default_incomplete', ... })` — same shape as the one-time flow: the response includes a `clientSecret` from the incomplete invoice's Payment Intent. Client confirms via Stripe.js Payment Element (which is also what surfaces Apple Pay on Safari — see below).
+
+**Webhook routing.** All subscription lifecycle events (`invoice.paid`, `invoice.payment_failed`, `customer.subscription.updated`, `customer.subscription.deleted`) flow through the existing `POST /webhooks/stripe` endpoint. One signature verification, one `webhook_events` dedup ledger. `PaymentsService.handleWebhookEvent` routes them to `SubscriptionsService`.
+
+**Cancellation is graceful by default.** `POST /subscriptions/:id/cancel` sets `cancel_at_period_end=true` so the user finishes the period they've paid for. Stripe emits `customer.subscription.updated`; the actual end-of-period termination arrives later as `customer.subscription.deleted`. State is always driven by webhooks — Stripe is the source of truth for subscription state.
+
+Every subscription transition writes to `subscriptions.subscription_events` (audit trail) and appends to the outbox (`subscription.activated`, `subscription.payment_failed`, `subscription.canceled`) so downstream modules (notifications, and eventually the SSE stream) see the same event flow as orders.
+
+### 8. Apple Pay
+
+Apple Pay in Stripe isn't a separate integration — it's a payment method surfaced through the same Payment Element that already handles cards. The backend has essentially one job:
+
+- **Serve the domain-verification file** at `GET /.well-known/apple-developer-merchantid-domain-association`. Contents come from `APPLE_PAY_DOMAIN_ASSOCIATION` env var (unset → 404).
+
+To enable Apple Pay end-to-end:
+
+1. Stripe dashboard → **Settings → Payment methods → Apple Pay → Configure → Add a new domain** — enter your deployed domain (e.g. `paycartbackend-production.up.railway.app`).
+2. Stripe hands you a plain-text token file. Paste the single line into `APPLE_PAY_DOMAIN_ASSOCIATION` in Railway (or your `.env` for local `ngrok` testing).
+3. Click **Verify** in the Stripe dashboard — Stripe fetches `/.well-known/apple-developer-merchantid-domain-association`, checks the contents match, marks the domain verified.
+4. Frontend renders `<PaymentElement />` from `@stripe/stripe-js` with the `clientSecret` returned by our `checkout` or `subscribe` endpoints. Apple Pay auto-appears on Safari on iOS/macOS with a card in Wallet. Chrome/Firefox users get a card form; iPhone users get the native Apple Pay sheet.
+
+Constraints worth knowing:
+
+- Apple Pay refuses to render on `localhost`. For local testing, use `ngrok` + a real HTTPS domain, verify that domain in Stripe, and access the frontend through the tunnel URL.
+- Only Safari (iOS/macOS) and native iOS apps surface Apple Pay. There is no Chrome equivalent — Chrome shows Google Pay instead, which Stripe also handles automatically through the same Payment Element.
+
+**No PaymentIntent code changes were needed.** The `automatic_payment_methods: { enabled: true }` we already set on `createPaymentIntent` and the `payment_settings.save_default_payment_method` we set on `createSubscription` handle both. Enabling Apple Pay is a dashboard + domain-verification concern, not an API concern.
+
+### 9. Realtime order stream over SSE
 
 `GET /orders/:id/stream` returns a Server-Sent Events stream:
 - First message is a **snapshot** — the current order + its full `order_events` history — so the client works with one request.
@@ -113,9 +149,14 @@ All order/payment endpoints require `Authorization: Bearer <jwt>`.
 | `GET` | `/orders/:id/events` | audit trail of state transitions |
 | `GET` | `/orders/:id/stream` | SSE stream (auth: `?token=<stream-token>`) |
 | `POST` | `/orders/:id/checkout` | requires `Idempotency-Key` header; returns Stripe `client_secret` |
+| `POST` | `/subscriptions` | requires `Idempotency-Key` header; starts a recurring subscription |
+| `GET` | `/subscriptions` | list caller's subscriptions |
+| `GET` | `/subscriptions/:id` | one subscription (owner only) |
+| `POST` | `/subscriptions/:id/cancel` | cancel at period end |
 | `POST` | `/webhooks/stripe` | Stripe webhook receiver (raw body, signature-verified) |
 | `GET` | `/inventory` | list current stock |
 | `GET` | `/inventory/:productId` | stock for one product |
+| `GET` | `/.well-known/apple-developer-merchantid-domain-association` | Apple Pay domain-verification file (only if `APPLE_PAY_DOMAIN_ASSOCIATION` is set) |
 
 ## API docs
 
@@ -125,9 +166,10 @@ Interactive [Scalar](https://scalar.com/) reference at `http://localhost:3000/do
 
 Each module owns one Postgres schema. **No cross-schema foreign keys.** Consistency across module boundaries is maintained by events, not by the database.
 
-- `auth.users`
-- `products.products` (seeded with 4 one-time SKUs + 1 recurring `coffee-club-monthly`)
+- `auth.users` (`stripe_customer_id` populated lazily on first subscribe)
+- `products.products` (seeded with one-time coffee SKUs + `coffee-club-monthly`; `stripe_price_id` populated on boot for recurring rows)
 - `orders.orders`, `orders.order_items`, `orders.order_events`
+- `subscriptions.subscriptions`, `subscriptions.subscription_events`
 - `payments.payments`, `payments.webhook_events`
 - `inventory.inventory`, `inventory.stock_adjustments` (idempotency ledger)
 - `notifications.notifications_log`
