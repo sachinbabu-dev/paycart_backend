@@ -26,8 +26,19 @@ export class OrderEntity {
   // Amounts stored in the smallest currency unit (cents) as bigint to avoid
   // float rounding. Column typed as string in TypeORM because JS numbers
   // can't safely represent all int64 values.
+  //
+  // Invariant enforced by DB CHECK: total_amount = subtotal_amount - discount_amount.
+  @Column({ name: 'subtotal_amount', type: 'bigint' })
+  subtotalAmount!: string;
+
+  @Column({ name: 'discount_amount', type: 'bigint', default: '0' })
+  discountAmount!: string;
+
   @Column({ name: 'total_amount', type: 'bigint' })
   totalAmount!: string;
+
+  @Column({ name: 'coupon_code', type: 'varchar', length: 64, nullable: true })
+  couponCode!: string | null;
 
   @Column({ type: 'varchar', length: 3 })
   currency!: string;

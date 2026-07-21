@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { OutboxService } from '../common/outbox/outbox.service';
+import { CouponsService } from '../coupons/coupons.service';
 import { ProductType } from '../products/product-type';
 import { ProductsService } from '../products/products.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -21,6 +22,7 @@ export class OrdersService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly outbox: OutboxService,
     private readonly products: ProductsService,
+    private readonly coupons: CouponsService,
   ) {}
 
   async create(userId: string, dto: CreateOrderDto): Promise<OrderEntity> {
@@ -57,20 +59,28 @@ export class OrdersService {
     }
     const currency = currencies.values().next().value ?? 'USD';
 
-    let totalAmount = 0n;
+    let subtotalAmount = 0n;
     const itemRows = dto.items.map((item) => {
       const product = catalog.get(item.productId);
       if (!product) throw new NotFoundException('product not found');
       const unitPrice = BigInt(product.unitPrice);
-      totalAmount += unitPrice * BigInt(item.quantity);
+      subtotalAmount += unitPrice * BigInt(item.quantity);
       return { product, quantity: item.quantity, unitPrice };
     });
 
     return this.dataSource.transaction(async (manager) => {
+      // Create the order first with the pre-discount totals so we have an id
+      // to attach the redemption row to. The DB CHECK constraint requires
+      // total = subtotal - discount so we save once, then patch after the
+      // coupon step — both writes are in the same txn, so a coupon failure
+      // rolls back the whole thing.
       const order = manager.create(OrderEntity, {
         userId,
         status: OrderStatus.Pending,
-        totalAmount: totalAmount.toString(),
+        subtotalAmount: subtotalAmount.toString(),
+        discountAmount: '0',
+        totalAmount: subtotalAmount.toString(),
+        couponCode: null,
         currency,
         items: itemRows.map((row) =>
           manager.create(OrderItemEntity, {
@@ -81,11 +91,34 @@ export class OrdersService {
         ),
       });
       const saved = await manager.save(order);
+
+      let discountAmount = 0n;
+      if (dto.couponCode) {
+        const quote = await this.coupons.redeemInTransaction(manager, {
+          code: dto.couponCode,
+          orderId: saved.id,
+          userId,
+          subtotal: subtotalAmount,
+          currency,
+        });
+        discountAmount = quote.discountAmount;
+        saved.couponCode = quote.code;
+        saved.discountAmount = discountAmount.toString();
+        saved.totalAmount = (subtotalAmount - discountAmount).toString();
+        await manager.save(saved);
+      }
+
       await this.recordEvent(manager, {
         orderId: saved.id,
         eventType: ORDER_EVENT_TYPES.Created,
         toStatus: OrderStatus.Pending,
-        payload: { totalAmount: saved.totalAmount, currency: saved.currency },
+        payload: {
+          subtotalAmount: saved.subtotalAmount,
+          discountAmount: saved.discountAmount,
+          totalAmount: saved.totalAmount,
+          currency: saved.currency,
+          couponCode: saved.couponCode,
+        },
       });
       await this.outbox.append(manager, {
         aggregateType: 'order',
@@ -94,8 +127,11 @@ export class OrdersService {
         payload: {
           orderId: saved.id,
           userId: saved.userId,
+          subtotalAmount: saved.subtotalAmount,
+          discountAmount: saved.discountAmount,
           totalAmount: saved.totalAmount,
           currency: saved.currency,
+          couponCode: saved.couponCode,
         },
       });
       return saved;

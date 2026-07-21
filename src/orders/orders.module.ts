@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
+import { CouponsModule } from '../coupons/coupons.module';
 import { ProductsModule } from '../products/products.module';
 import { OrderEventEntity } from './entities/order-event.entity';
 import { OrderItemEntity } from './entities/order-item.entity';
@@ -14,6 +15,7 @@ import { OrdersService } from './orders.service';
     TypeOrmModule.forFeature([OrderEntity, OrderItemEntity, OrderEventEntity]),
     AuthModule,
     ProductsModule,
+    CouponsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService, OrderStreamService],

@@ -4,6 +4,7 @@ import {
   ArrayMinSize,
   IsArray,
   IsInt,
+  IsOptional,
   IsString,
   Length,
   Min,
@@ -36,4 +37,15 @@ export class CreateOrderDto {
   @ValidateNested({ each: true })
   @Type(() => CreateOrderItemDto)
   items!: CreateOrderItemDto[];
+
+  @ApiProperty({
+    required: false,
+    example: 'WELCOME10',
+    description:
+      'Optional coupon code applied at order creation. Discount is computed server-side; the total on the returned order reflects it.',
+  })
+  @IsOptional()
+  @IsString()
+  @Length(3, 64)
+  couponCode?: string;
 }

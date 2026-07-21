@@ -7,6 +7,7 @@ import { DatabaseModule } from './common/database/database.module';
 import { EventBusModule } from './common/event-bus/event-bus.module';
 import { OutboxModule } from './common/outbox/outbox.module';
 import { envValidationSchema } from './config/env.validation';
+import { CouponsModule } from './coupons/coupons.module';
 import { FulfillmentModule } from './fulfillment/fulfillment.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -33,6 +34,7 @@ import { WellKnownModule } from './well-known/well-known.module';
     OutboxModule,
     AuthModule,
     ProductsModule,
+    CouponsModule,
     OrdersModule,
     SubscriptionsModule,
     PaymentsModule,
