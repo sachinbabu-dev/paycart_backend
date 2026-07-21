@@ -6,29 +6,41 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Sse,
   UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiHeader,
   ApiOperation,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Observable } from 'rxjs';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtStreamAuthGuard } from '../auth/jwt-stream-auth.guard';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { SubscribeDto } from './dto/subscribe.dto';
 import { SubscriptionEntity } from './entities/subscription.entity';
+import { SubscriptionStreamService } from './subscription-stream.service';
 import { SubscribeResult, SubscriptionsService } from './subscriptions.service';
 
+// Guards are declared per-method rather than at the class level: the SSE
+// endpoint needs its own guard because EventSource cannot set an Authorization
+// header — it accepts a stream-scoped token via ?token=. Same pattern as
+// OrdersController.
 @ApiTags('subscriptions')
-@ApiBearerAuth('access-token')
 @Controller('subscriptions')
-@UseGuards(JwtAuthGuard)
 export class SubscriptionsController {
-  constructor(private readonly subscriptions: SubscriptionsService) {}
+  constructor(
+    private readonly subscriptions: SubscriptionsService,
+    private readonly stream: SubscriptionStreamService,
+  ) {}
 
   @Post()
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Start a subscription. Returns a client_secret to confirm.',
     description:
@@ -54,12 +66,16 @@ export class SubscriptionsController {
   }
 
   @Get()
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
   @ApiOperation({ summary: "List the caller's subscriptions." })
   list(@CurrentUser() user: AuthenticatedUser): Promise<SubscriptionEntity[]> {
     return this.subscriptions.listForUser(user.id);
   }
 
   @Get(':id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
   @ApiOperation({ summary: 'Get one subscription (owner only).' })
   get(
     @CurrentUser() user: AuthenticatedUser,
@@ -69,6 +85,8 @@ export class SubscriptionsController {
   }
 
   @Post(':id/cancel')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Cancel a subscription at period end (default) or immediately.',
     description:
@@ -79,5 +97,24 @@ export class SubscriptionsController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<SubscriptionEntity> {
     return this.subscriptions.cancel(id, user.id);
+  }
+
+  @Sse(':id/stream')
+  @UseGuards(JwtStreamAuthGuard)
+  @ApiOperation({
+    summary: 'Live server-sent event stream of subscription updates.',
+    description:
+      'Opens an SSE connection. First message is a snapshot (current subscription + full event history). Subsequent messages are pushed as `subscription.*` events fire (created, activated, updated, payment_failed, canceled). Auth via short-lived stream token from POST /auth/stream-token, passed as ?token=. Keepalive pings prevent proxy idle timeouts.',
+  })
+  @ApiQuery({
+    name: 'token',
+    required: true,
+    description: 'Short-lived stream-scoped JWT from POST /auth/stream-token.',
+  })
+  streamOne(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Observable<{ data: unknown }> {
+    return this.stream.forSubscription(id, user.id);
   }
 }

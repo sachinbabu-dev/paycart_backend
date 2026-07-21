@@ -42,6 +42,8 @@ export class SubscriptionsService implements OnModuleInit {
   constructor(
     @InjectRepository(SubscriptionEntity)
     private readonly subscriptions: Repository<SubscriptionEntity>,
+    @InjectRepository(SubscriptionEventEntity)
+    private readonly subscriptionEvents: Repository<SubscriptionEventEntity>,
     @InjectRepository(UserEntity) private readonly users: Repository<UserEntity>,
     @InjectRepository(ProductEntity)
     private readonly products: Repository<ProductEntity>,
@@ -192,6 +194,17 @@ export class SubscriptionsService implements OnModuleInit {
     return this.subscriptions.find({
       where: { userId },
       order: { createdAt: 'DESC' },
+    });
+  }
+
+  async listEvents(
+    subscriptionId: string,
+    userId: string,
+  ): Promise<SubscriptionEventEntity[]> {
+    await this.findByIdForUser(subscriptionId, userId);
+    return this.subscriptionEvents.find({
+      where: { subscriptionId },
+      order: { createdAt: 'ASC' },
     });
   }
 

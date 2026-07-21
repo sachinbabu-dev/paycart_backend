@@ -113,7 +113,17 @@ export class StripeService {
         payment_behavior: 'default_incomplete',
         payment_settings: {
           save_default_payment_method: 'on_subscription',
-          payment_method_types: ['card'],
+          // `card` covers cards + wallets that ride on card rails (Apple Pay
+          // and Google Pay). Apple Pay appears automatically on Safari when
+          // the domain is verified in Stripe dashboard — no separate type
+          // needed. `amazon_pay` is its own payment method type and has to
+          // be listed explicitly.
+          //
+          // Prefer configuring payment methods in Stripe Dashboard for real
+          // deployments (Settings → Payment methods) — that lets you toggle
+          // methods on/off without a code deploy. This explicit list is here
+          // for the portfolio demo.
+          payment_method_types: ['card', 'amazon_pay'],
         },
         expand: ['latest_invoice.payment_intent'],
         metadata: { user_id: params.userId, product_sku: params.productSku },

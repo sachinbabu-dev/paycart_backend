@@ -7,6 +7,7 @@ import { ProductsModule } from '../products/products.module';
 import { ProductEntity } from '../products/product.entity';
 import { SubscriptionEventEntity } from './entities/subscription-event.entity';
 import { SubscriptionEntity } from './entities/subscription.entity';
+import { SubscriptionStreamService } from './subscription-stream.service';
 import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionsService } from './subscriptions.service';
 
@@ -28,7 +29,7 @@ import { SubscriptionsService } from './subscriptions.service';
     forwardRef(() => PaymentsModule),
   ],
   controllers: [SubscriptionsController],
-  providers: [SubscriptionsService],
+  providers: [SubscriptionsService, SubscriptionStreamService],
   exports: [SubscriptionsService],
 })
 export class SubscriptionsModule {}
