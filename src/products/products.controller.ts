@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -53,5 +54,18 @@ export class ProductsController {
     @Body() dto: UpdateProductDto,
   ): Promise<ProductEntity> {
     return this.products.update(sku, dto);
+  }
+
+  @Delete(':sku')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.Admin, UserRole.SuperAdmin)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Soft-delete a product (sets active=false). Admin only.',
+    description:
+      'Historical orders reference the SKU by string, so the row is kept and only removed from the active catalog.',
+  })
+  remove(@Param('sku') sku: string): Promise<ProductEntity> {
+    return this.products.deactivate(sku);
   }
 }

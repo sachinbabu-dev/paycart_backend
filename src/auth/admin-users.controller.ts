@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -55,5 +58,20 @@ export class AdminUsersController {
     @Body() dto: UpdateUserRoleDto,
   ): Promise<AdminUserView> {
     return this.adminUsers.updateRole(actor.id, id, dto.role);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary:
+      'Soft-delete a user (customer or admin). Cannot delete self or last superadmin.',
+    description:
+      'Sets deleted_at. The row is retained so historical orders/payments still resolve; the email becomes reusable for a fresh signup.',
+  })
+  async remove(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<void> {
+    await this.adminUsers.softDelete(actor.id, id);
   }
 }

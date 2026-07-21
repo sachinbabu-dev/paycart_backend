@@ -75,4 +75,14 @@ export class ProductsService {
     if (dto.active !== undefined) product.active = dto.active;
     return this.products.save(product);
   }
+
+  // Soft-delete only — historical orders reference SKUs as plain strings, so
+  // hard-deleting would leave order_items pointing at a name/price that no
+  // longer exists. Sets active=false so the catalog stops listing it.
+  async deactivate(sku: string): Promise<ProductEntity> {
+    const product = await this.findBySku(sku);
+    if (!product.active) return product;
+    product.active = false;
+    return this.products.save(product);
+  }
 }

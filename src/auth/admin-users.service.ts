@@ -108,6 +108,29 @@ export class AdminUsersService {
     return this.toView(saved);
   }
 
+  // Soft-delete: sets deleted_at. TypeORM excludes soft-deleted rows from
+  // future finds automatically (login, list, etc. all become no-ops for
+  // the deleted user). The row itself is kept for audit / order history.
+  async softDelete(actorId: string, targetId: string): Promise<void> {
+    const target = await this.users.findOne({ where: { id: targetId } });
+    if (!target) throw new NotFoundException('user not found');
+
+    if (actorId === target.id) {
+      throw new BadRequestException('cannot delete your own account');
+    }
+
+    if (target.role === UserRole.SuperAdmin) {
+      const superadminCount = await this.users.count({
+        where: { role: UserRole.SuperAdmin },
+      });
+      if (superadminCount <= 1) {
+        throw new BadRequestException('cannot delete the last superadmin');
+      }
+    }
+
+    await this.users.softRemove(target);
+  }
+
   private toView(user: UserEntity): AdminUserView {
     return {
       id: user.id,
