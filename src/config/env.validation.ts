@@ -11,6 +11,17 @@ export const envValidationSchema = Joi.object({
   JWT_SECRET: Joi.string().min(16).required(),
   JWT_EXPIRES_IN: Joi.string().default('7d'),
 
+  // Optional bootstrap superadmin — seeded once on startup if no superadmin
+  // exists. Both must be set together; either alone is a config mistake.
+  SUPERADMIN_EMAIL: Joi.string().email().optional(),
+  SUPERADMIN_PASSWORD: Joi.string()
+    .min(8)
+    .when('SUPERADMIN_EMAIL', {
+      is: Joi.exist(),
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
+
   STRIPE_SECRET_KEY: Joi.string().required(),
   STRIPE_WEBHOOK_SECRET: Joi.string().required(),
 

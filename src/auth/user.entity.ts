@@ -5,6 +5,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { UserRole } from './user-role';
 
 @Entity({ schema: 'auth', name: 'users' })
 export class UserEntity {
@@ -16,6 +17,9 @@ export class UserEntity {
 
   @Column({ name: 'password_hash', type: 'varchar', length: 255 })
   passwordHash!: string;
+
+  @Column({ type: 'varchar', length: 16, default: UserRole.Customer })
+  role!: UserRole;
 
   // Lazily populated on the user's first subscription. See
   // SubscriptionsService.ensureStripeCustomer.

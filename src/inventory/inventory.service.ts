@@ -41,6 +41,25 @@ export class InventoryService implements OnModuleInit {
     return this.inventory.find({ order: { productId: 'ASC' } });
   }
 
+  // Admin override — sets absolute stock. Bypasses the ledger because this is
+  // a manual restock, not a domain event decrement. Uses upsert so it works
+  // whether the product row exists or not.
+  async setStock(
+    productId: string,
+    stockQuantity: number,
+  ): Promise<InventoryEntity> {
+    await this.inventory.upsert(
+      { productId, stockQuantity },
+      { conflictPaths: ['productId'] },
+    );
+    const row = await this.inventory.findOne({ where: { productId } });
+    if (!row) {
+      // Practically unreachable after upsert; keeps the return type honest.
+      throw new Error(`inventory row missing after upsert: ${productId}`);
+    }
+    return row;
+  }
+
   private async handlePaymentSucceeded(
     event: DomainEvent<PaymentSucceededPayload>,
   ): Promise<void> {

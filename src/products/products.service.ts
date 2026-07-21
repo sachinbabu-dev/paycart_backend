@@ -1,7 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, QueryFailedError, Repository } from 'typeorm';
 import { ProductEntity } from './product.entity';
+import { CreateProductDto } from './dto/create-product.dto';
+import { UpdateProductDto } from './dto/update-product.dto';
+
+const UNIQUE_VIOLATION = '23505';
 
 @Injectable()
 export class ProductsService {
@@ -29,5 +37,42 @@ export class ProductsService {
     if (skus.length === 0) return new Map();
     const rows = await this.products.find({ where: { sku: In(skus) } });
     return new Map(rows.map((p) => [p.sku, p]));
+  }
+
+  async create(dto: CreateProductDto): Promise<ProductEntity> {
+    try {
+      return await this.products.save(
+        this.products.create({
+          sku: dto.sku,
+          name: dto.name,
+          description: dto.description ?? null,
+          type: dto.type,
+          unitPrice: String(dto.unitPrice),
+          currency: dto.currency.toUpperCase(),
+          billingInterval: dto.billingInterval ?? null,
+          active: dto.active ?? true,
+        }),
+      );
+    } catch (err) {
+      if (
+        err instanceof QueryFailedError &&
+        (err as unknown as { code?: string }).code === UNIQUE_VIOLATION
+      ) {
+        throw new ConflictException(`sku already exists: ${dto.sku}`);
+      }
+      throw err;
+    }
+  }
+
+  async update(sku: string, dto: UpdateProductDto): Promise<ProductEntity> {
+    const product = await this.findBySku(sku);
+    if (dto.name !== undefined) product.name = dto.name;
+    if (dto.description !== undefined) product.description = dto.description;
+    if (dto.unitPrice !== undefined) product.unitPrice = String(dto.unitPrice);
+    if (dto.billingInterval !== undefined) {
+      product.billingInterval = dto.billingInterval;
+    }
+    if (dto.active !== undefined) product.active = dto.active;
+    return this.products.save(product);
   }
 }

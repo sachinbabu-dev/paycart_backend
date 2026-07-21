@@ -8,13 +8,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
 import { UserEntity } from './user.entity';
+import { UserRole } from './user-role';
 
 const BCRYPT_COST = 12;
 const STREAM_TOKEN_TTL = '60s';
 
 export interface AuthResult {
   accessToken: string;
-  user: { id: string; email: string };
+  user: { id: string; email: string; role: UserRole };
 }
 
 export interface StreamTokenResult {
@@ -29,12 +30,16 @@ export class AuthService {
     private readonly jwt: JwtService,
   ) {}
 
+  // Public signup path — always creates a customer. Admin/superadmin accounts
+  // are created only via the admin endpoints (see AdminUsersController).
   async signup(email: string, password: string): Promise<AuthResult> {
     const existing = await this.users.findOne({ where: { email } });
     if (existing) throw new ConflictException('email already registered');
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
-    const user = await this.users.save(this.users.create({ email, passwordHash }));
+    const user = await this.users.save(
+      this.users.create({ email, passwordHash, role: UserRole.Customer }),
+    );
     return this.issueToken(user);
   }
 
@@ -58,7 +63,14 @@ export class AuthService {
   }
 
   private issueToken(user: UserEntity): AuthResult {
-    const accessToken = this.jwt.sign({ sub: user.id, email: user.email });
-    return { accessToken, user: { id: user.id, email: user.email } };
+    const accessToken = this.jwt.sign({
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    });
+    return {
+      accessToken,
+      user: { id: user.id, email: user.email, role: user.role },
+    };
   }
 }

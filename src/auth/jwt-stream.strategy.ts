@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import type { Request } from 'express';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import type { AuthenticatedUser } from './jwt.strategy';
+import { UserRole } from './user-role';
 
 export const STREAM_TOKEN_SCOPE = 'stream';
 
@@ -42,6 +43,12 @@ export class JwtStreamStrategy extends PassportStrategy(Strategy, 'jwt-stream') 
     if (payload.scope !== STREAM_TOKEN_SCOPE) {
       throw new UnauthorizedException('token is not scoped for streaming');
     }
-    return { id: payload.sub, email: payload.email ?? '' };
+    // Stream tokens are read-only and only used by the SSE order stream —
+    // role authorization is not applied there, so default to Customer.
+    return {
+      id: payload.sub,
+      email: payload.email ?? '',
+      role: UserRole.Customer,
+    };
   }
 }
