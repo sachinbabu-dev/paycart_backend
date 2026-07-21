@@ -6,15 +6,17 @@ export class AddUserDeletedAt1700000005000 implements MigrationInterface {
       ALTER TABLE auth.users
       ADD COLUMN deleted_at TIMESTAMPTZ
     `);
-    // Partial index — only live rows need to be scanned for the common
-    // "look up user by email" path, and it doubles as the uniqueness
-    // constraint we actually want (soft-deleted emails can be reused).
+    // Drop the full-table UNIQUE constraint (this cascades to the index it
+    // owns — trying to drop the index directly fails because the constraint
+    // depends on it) and replace it with a partial unique index so that
+    // soft-deleted emails can be re-registered.
+    await queryRunner.query(
+      `ALTER TABLE auth.users DROP CONSTRAINT IF EXISTS users_email_key`,
+    );
     await queryRunner.query(`
-      DROP INDEX IF EXISTS auth.users_email_key;
-      ALTER TABLE auth.users DROP CONSTRAINT IF EXISTS users_email_key;
       CREATE UNIQUE INDEX users_email_active_key
         ON auth.users (email)
-        WHERE deleted_at IS NULL;
+        WHERE deleted_at IS NULL
     `);
   }
 
