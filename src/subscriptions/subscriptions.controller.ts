@@ -99,6 +99,21 @@ export class SubscriptionsController {
     return this.subscriptions.cancel(id, user.id);
   }
 
+  @Post(':id/sync')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Pull the latest subscription state from Stripe and apply it.',
+    description:
+      'Reconciliation path for missed / delayed / out-of-order webhooks. Fetches the current subscription from Stripe, applies the same state-machine and outbox logic as the `customer.subscription.updated` webhook, and returns the resulting local row. Idempotent — safe to spam. SSE clients receive a `subscription.updated` event as usual.',
+  })
+  sync(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<SubscriptionEntity> {
+    return this.subscriptions.syncFromStripe(id, user.id);
+  }
+
   @Sse(':id/stream')
   @UseGuards(JwtStreamAuthGuard)
   @ApiOperation({

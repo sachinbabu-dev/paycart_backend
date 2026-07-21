@@ -1,4 +1,5 @@
 import {
+  AfterLoad,
   Column,
   CreateDateColumn,
   Entity,
@@ -7,6 +8,11 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { SubscriptionStatus } from '../subscription-status';
+
+// First 8 chars of the UUID — enough uniqueness for a user-visible reference
+// and matches how the id is shown in the header. Never use this for lookups;
+// it isn't guaranteed unique across the whole table.
+const SHORT_ID_LENGTH = 8;
 
 @Entity({ schema: 'subscriptions', name: 'subscriptions' })
 export class SubscriptionEntity {
@@ -52,4 +58,13 @@ export class SubscriptionEntity {
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
+
+  // Populated on load, not persisted. Assigning in @AfterLoad makes it an own
+  // property so JSON.stringify (Nest's default serializer) picks it up.
+  shortId!: string;
+
+  @AfterLoad()
+  private populateShortId(): void {
+    this.shortId = this.id.slice(0, SHORT_ID_LENGTH);
+  }
 }

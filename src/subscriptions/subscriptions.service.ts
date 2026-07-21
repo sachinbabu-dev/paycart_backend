@@ -287,12 +287,50 @@ export class SubscriptionsService implements OnModuleInit {
       where: { stripeSubscriptionId: stripeSub.id },
     });
     if (!sub) return;
+    await this.applyStripeSubscription(manager, sub, stripeSub, 'stripe.updated');
+  }
+
+  // Reconciliation entry point. Pulls the current subscription from Stripe and
+  // applies it locally — the pull-based counterpart to the push-based webhook.
+  // Justification: Stripe webhooks are best-effort. Events can arrive out of
+  // order, be delayed for minutes, or be dropped entirely if our endpoint is
+  // down long enough that Stripe gives up retrying. Any long-lived Stripe
+  // integration needs a "just re-read the truth" path in addition to webhooks.
+  //
+  // Uses the exact same apply logic as the webhook handler so behavior is
+  // identical whether the trigger was push or pull: same state-machine gate,
+  // same outbox event (so SSE clients see the sync happen live).
+  async syncFromStripe(
+    subscriptionId: string,
+    userId: string,
+  ): Promise<SubscriptionEntity> {
+    const local = await this.findByIdForUser(subscriptionId, userId);
+    const stripeSub = await this.stripe.retrieveSubscription(
+      local.stripeSubscriptionId,
+    );
+    return this.dataSource.transaction(async (manager) => {
+      // Re-read in-txn so we own the row while updating.
+      const sub = await manager.findOne(SubscriptionEntity, {
+        where: { id: local.id },
+      });
+      if (!sub) throw new NotFoundException('subscription not found');
+      await this.applyStripeSubscription(manager, sub, stripeSub, 'sync');
+      return sub;
+    });
+  }
+
+  private async applyStripeSubscription(
+    manager: EntityManager,
+    sub: SubscriptionEntity,
+    stripeSub: Stripe.Subscription,
+    source: 'stripe.updated' | 'sync',
+  ): Promise<void> {
     const newStatus = stripeSub.status as SubscriptionStatus;
     sub.cancelAtPeriodEnd = stripeSub.cancel_at_period_end;
     sub.currentPeriodEnd = toDate(stripeSub.current_period_end);
     if (sub.status !== newStatus) {
       if (SubscriptionStateMachine.canTransition(sub.status, newStatus)) {
-        await this.transition(manager, sub, newStatus, { source: 'stripe.updated' });
+        await this.transition(manager, sub, newStatus, { source });
       } else {
         // Stripe told us something the state machine considers illegal.
         // Log and don't force the transition — most likely a race that a
@@ -315,6 +353,7 @@ export class SubscriptionsService implements OnModuleInit {
         productId: sub.productId,
         status: sub.status,
         cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+        source,
       },
     });
   }
